@@ -5,11 +5,13 @@ use Getopt::Std;
 use File::Basename;
 use File::Spec;
 use IO::Uncompress::AnyUncompress;
+#use JSON::PP;
+#use File::Find;
 use Data::Dumper;
 
 #......................................................................................
 
-our $VERSION = "0.0.2";
+our $VERSION = "0.0.3";
 our $EXE = basename($0);
 our $URL = "https://github.com/tseemann/$EXE";
 
@@ -91,16 +93,16 @@ $opt{c} and citation();
 @ARGV or err("Please provide some files(s) and/or folder(s)");
 
 #......................................................................................
-
-sub find_pairs {
-  my($fns) = @_;
-  for my $f (sort keys %$fns) {
-    my(undef,$dir,$name) = File::Spec->splitpath($f);
-    msg("Pairing: $name");
-    if ($name =~ m/_[Rr]1\./) {
-      msg("Check for R2 mate?");
-    }
-  }
+# make a sensible ID from a filename
+sub guess_id {
+  my($fn) = @_;
+  $fn =~ s,^.*/,,;
+  $fn =~ s/\.(gz|xz|zstd)$//; # compression
+  $fn =~ s/\.(fq|fastq|fa|fasta|fna)$//; # format
+  $fn =~ s/_\d{3}$//; # illumina lanes before R1/R2
+  $fn =~ s/\.trim//;
+  $fn =~ s/_R?[12]$//; # PE reads
+  return $fn;
 }
 
 #......................................................................................
@@ -139,6 +141,7 @@ my @file;
 for my $fname (@ARGV) {
   msg("Searching: '$fname'");
   if (-r $fname) {
+    $fname = File::Spec->rel2abs($fname);
     my @f = qx"find '$fname' -maxdepth $opt{d} -type f -print 2> $DEVNULL";
     chomp @f;
     push @file, @f;
@@ -151,12 +154,19 @@ msg("Analyzing files....");
 my %file;
 for my $fn (@file) {
   if (my $type = seq_type($fn)) {
-    $file{$fn} = $type;
+    my(undef,$dir,$name) = File::Spec->splitpath($fn);
+    $file{$fn} = {
+      TYPE => $type,
+      DIR  => $dir,
+      NAME => $name,
+      ID   => guess_id($name),
+    }; 
   }
 }
 msg("Identified", scalar keys %file, "sequence files");
-#print Dumper(\%file);
-find_pairs(\%file);
+print Dumper(\%file);
+
+#find_pairs(\%file);
 
 msg("Done.");
 exit(0);
