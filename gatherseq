@@ -5,13 +5,14 @@ use Getopt::Std;
 use File::Basename;
 use File::Spec;
 use IO::Uncompress::AnyUncompress;
-#use JSON::PP;
+use JSON::PP;
 #use File::Find;
 use Data::Dumper;
+use List::Util 'uniq';
 
 #......................................................................................
 
-our $VERSION = "0.0.3";
+our $VERSION = "0.0.4";
 our $EXE = basename($0);
 our $URL = "https://github.com/tseemann/$EXE";
 
@@ -33,6 +34,7 @@ my %opt = (
  'd' => 4,
  'f' => join(",", @INFMT),
  'F' => $OUTFMT[0],
+ 'x' => '^(Undetermined|NTC|PTC', 
 );
 
 #......................................................................................
@@ -51,9 +53,11 @@ sub usage {
     "  -q       No output while running, only errors\n",
     "  -c       Show citation and exit\n",
     "PARAMETERS\n",
+    "  -g       Aggressive ID extraction\m",
     "  -d INT   Maximum depth to recurse [$opt{d}]\n",
     "  -f CSV   Include filetypes [$opt{f}] from {@INFMT}\n",
     "  -F STR   Output format [$opt{F}] from {@OUTFMT}\n",
+    "  -x CSV   Exclude files matching this [$opt{x}]\n",
     "HOMEPAGE\n  $URL\n",
     "END\n";
   exit($errcode);
@@ -86,7 +90,7 @@ sub err {
 
 #......................................................................................
 
-getopts('vhqcD:F:f:', \%opt) or exit(-1);
+getopts('vhqcgD:F:f:x:', \%opt) or exit(-1);
 $opt{v} and version();
 $opt{h} and usage(0);
 $opt{c} and citation();
@@ -99,9 +103,10 @@ sub guess_id {
   $fn =~ s,^.*/,,;
   $fn =~ s/\.(gz|xz|zstd)$//; # compression
   $fn =~ s/\.(fq|fastq|fa|fasta|fna)$//; # format
-  $fn =~ s/_\d{3}$//; # illumina lanes before R1/R2
-  $fn =~ s/\.trim//;
-  $fn =~ s/_R?[12]$//; # PE reads
+#  $fn =~ s/_\d{3}$// if $opt{g}; # illumina lanes before R1/R2
+#  $fn =~ s/\.trim//;
+  $fn =~ s/_R?[12].*?$//; # PE reads
+  $fn =~ s/_S\d{1,3}$// if $opt{g}; # illumina lanes before R1/R2
   return $fn;
 }
 
@@ -155,6 +160,7 @@ my %file;
 for my $fn (@file) {
   if (my $type = seq_type($fn)) {
     my(undef,$dir,$name) = File::Spec->splitpath($fn);
+#    next if $name =~ m/$opt{x}/;
     $file{$fn} = {
       TYPE => $type,
       DIR  => $dir,
@@ -164,7 +170,21 @@ for my $fn (@file) {
   }
 }
 msg("Identified", scalar keys %file, "sequence files");
-print Dumper(\%file);
+
+my @id = sort { $a cmp $b }
+         uniq 
+         map { $file{$_}{ID} } keys %file;
+# print Dumper(\@id);
+my %rs;
+for my $id (@id) {
+  $rs{$id} = [ 
+    sort { $a cmp $b }
+    grep { $file{$_}{ID} eq $id } keys %file 
+  ];
+}
+#print Dumper(\%file);
+#print encode_json(\%rs);
+print JSON::PP->new->pretty->encode(\%rs);
 
 #find_pairs(\%file);
 
