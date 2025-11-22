@@ -3,20 +3,34 @@ use strict;
 use warnings;
 use Getopt::Std;
 use File::Basename;
+use File::Spec;
 use IO::Uncompress::AnyUncompress;
+use Data::Dumper;
 
 #......................................................................................
 
-our $VERSION = "0.0.1";
+our $VERSION = "0.0.2";
 our $EXE = basename($0);
-#our $STDIN = '/dev/stdin'; # '-' will be replaced with this
 our $URL = "https://github.com/tseemann/$EXE";
+
+my $DEVNULL = File::Spec->devnull();
+
+#my %FE = (
+#  'fastq' => m/\.f(ast)?q(\.gz)?$/,
+#  'fasta' => m/\.(fa|fna|fasta)(\.gz)?$/,
+#);
+
+my @INFMT = qw'ILL ONT ASM';
+my %INFMT = map { ($_ => 1) } @INFMT;
+
+my @OUTFMT = qw'snippy-ng snippy bohra2 bohra json';
+my %OUTFMT = map { ($_ => 1) } @OUTFMT;
 
 # default command line options
 my %opt = (
- 'm' => 1,
- 'M' => 2,
- 'F' => 'bohra',
+ 'd' => 4,
+ 'f' => join(",", @INFMT),
+ 'F' => $OUTFMT[0],
 );
 
 #......................................................................................
@@ -28,14 +42,16 @@ sub usage {
   print $ofh 
     "NAME\n  $EXE $VERSION\n",
     "SYNOPSIS\n  Scan and organize sequence files\n",
-    "USAGE\n  $EXE [options] file.{gb,fa,fq,gff,gfa,clw,sth}[.gz,bz2,zip] > output.fasta\n",
+    "USAGE\n  $EXE [opts] file(s) folder(s) > output.tsv\n",
     "OPTIONS\n",
     "  -h       Print this help\n",
     "  -v       Print version and exit\n",
     "  -q       No output while running, only errors\n",
-    "  -m INT   Minimum depth to recurse [$opt{m}]\n",
-    "  -M INT   Maximum depth to recurse [$opt{M}]\n",
-    "  -F STR   Output format [$opt{F}]\n",
+    "  -c       Show citation and exit\n",
+    "PARAMETERS\n",
+    "  -d INT   Maximum depth to recurse [$opt{d}]\n",
+    "  -f CSV   Include filetypes [$opt{f}] from {@INFMT}\n",
+    "  -F STR   Output format [$opt{F}] from {@OUTFMT}\n",
     "HOMEPAGE\n  $URL\n",
     "END\n";
   exit($errcode);
@@ -43,6 +59,15 @@ sub usage {
 
 sub version {
   print "$EXE $VERSION\n";
+  exit(0);
+}
+
+sub citation {
+  print<<"EOC";
+If you use this work please cite:
+
+Seemann T. "$EXE" (2025) $URL
+EOC
   exit(0);
 }
 
@@ -59,59 +84,82 @@ sub err {
 
 #......................................................................................
 
-getopts('vhqm:M:', \%opt) or exit(-1);
+getopts('vhqcD:F:f:', \%opt) or exit(-1);
 $opt{v} and version();
 $opt{h} and usage(0);
-@ARGV or usage(1);
+$opt{c} and citation();
+@ARGV or err("Please provide some files(s) and/or folder(s)");
+
+#......................................................................................
+
+sub find_pairs {
+  my($fns) = @_;
+  for my $f (sort keys %$fns) {
+    my(undef,$dir,$name) = File::Spec->splitpath($f);
+    msg("Pairing: $name");
+    if ($name =~ m/_[Rr]1\./) {
+      msg("Check for R2 mate?");
+    }
+  }
+}
+
+#......................................................................................
+
+sub seq_type {
+  my($fn) = @_;
+  $fn or err("seq_type: no file provided");
+  msg("Checking: $fn");
+  # skip empty files
+  return if -s $fn <= 0;
+  # read first line to see if we have any data
+  my $unzip = IO::Uncompress::AnyUncompress->new($fn);
+  return unless $unzip;
+  my $line = scalar(<$unzip>); # read first line
+  return unless $line;
+  if ($line =~ m/^>/) {
+    return 'ASM';
+  }
+  elsif ($line =~ m/^@(\S+)/) {
+    my $id = $1;
+    # ONT 2019
+    # @cd733afc-99bc-4eed-97e4-5abf1852f3b8 runid=38b9f2156c7de329e50c12b2a174b1c25b5b9382 read=1324 ch=8 start_time=2019-12-02T05:37:41Z flow_cell_id=FAK88669 protocol_group_id=M2019-02375 sample_id=M2019-02375 barcode=barcode01
+    # ILL 2025 NextSeq500
+    # @NS500345:722:HCVVYAFXC:1:11101:24986:1052 2:N:0:69
+    return 'ONT' if $id =~ m/^\w+-\w+|\w+=\w+/;
+    return 'ILL';
+  }
+  return; 
+}
 
 #......................................................................................
 
 msg("This is $EXE $VERSION");
 
+my @file;
 for my $fname (@ARGV) {
-  msg("Opening '$fname'");
-#  -d $fname and err("'$fname' is a directory not a file");
-#  -r $fname or err("'$fname' is not readable");
-  # read first line to see if we have any data
-#  my $unzip = IO::Uncompress::AnyUncompress->new($fname);
-##B  my $header = scalar(<$unzip>); # read first line
-#  $header or err("The input appears to be empty");
+  msg("Searching: '$fname'");
+  if (-r $fname) {
+    my @f = qx"find '$fname' -maxdepth $opt{d} -type f -print 2> $DEVNULL";
+    chomp @f;
+    push @file, @f;
+  }
 }
+
+msg("Found", 0+@file, "files");
+#print Dumper(\@file);
+msg("Analyzing files....");
+my %file;
+for my $fn (@file) {
+  if (my $type = seq_type($fn)) {
+    $file{$fn} = $type;
+  }
+}
+msg("Identified", scalar keys %file, "sequence files");
+#print Dumper(\%file);
+find_pairs(\%file);
 
 msg("Done.");
 exit(0);
-
-#......................................................................................
-
-sub parse_fasta {
-  my($lines) = @_;
-  my $count=0;
-  for my $line (@$lines) {
-    next if $line =~ m/^\s*$/;
-    if ($line =~ m/^>/) {
-      $count++;
-    }
-    else {
-      $line = purify($line);
-    }
-    print $line;
-  }
-  return $count;
-}
-
-#......................................................................................
-
-sub parse_fastq {
-  my($lines) = @_;
-  my $count=0;
-  # jump 4 lines at a time
-  for ( my $i=0 ; $i < $#{$lines} ; $i+=4 ) {
-    print ">", substr($lines->[$i], 1);
-    print purify( $lines->[$i+1] );
-    $count++;
-  }
-  return $count;
-}
 
 #......................................................................................
 
